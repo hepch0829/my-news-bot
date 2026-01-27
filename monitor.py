@@ -2,45 +2,48 @@ import os
 import subprocess
 import json
 import smtplib
+import urllib.request
+import xml.etree.ElementTree as ET
 from email.mime.text import MIMEText
 from email.header import Header
 import re
 
 # 配置区
+# Bloomberg Markets 的频道 ID: UCIALMKvObZNtJ6AmdCLP7Lg
+RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCIALMKvObZNtJ6AmdCLP7Lg"
 KEYWORDS = ["The China Show", "Insight", "Asia Trade"]
 HISTORY_FILE = "history.json"
 
-def get_latest_videos():
-    print("正在检查 YouTube 最新视频 (使用兼容模式)...")
-    # 增加 --no-check-certificates 等稳定参数
-    cmd = [
-        'yt-dlp', 
-        '--no-check-certificates',
-        '--quiet',
-        '--no-warnings',
-        '--print', '%(title)s|%(id)s|%(description)s', 
-        '--playlist-end', '10', 
-        'https://www.youtube.com/@markets/videos'
-    ]
+def get_latest_videos_rss():
+    print("正在通过 RSS 订阅源获取最新视频...")
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=60)
-        if result.stderr:
-            print(f"抓取警告: {result.stderr}")
+        # 抓取 RSS XML 数据
+        response = urllib.request.urlopen(RSS_URL, timeout=30)
+        data = response.read().decode('utf-8')
+        root = ET.fromstring(data)
+        
+        # XML 命名空间处理
+        ns = {'ns': 'http://www.w3.org/2005/Atom', 'yt': 'http://www.youtube.com/xml/schemas/2015'}
         
         videos = []
-        if result.stdout:
-            lines = result.stdout.strip().split('\n')
-            print(f"成功抓取到 {len(lines)} 行数据")
-            for line in lines:
-                parts = line.split('|')
-                if len(parts) >= 3:
-                    videos.append({"title": parts[0], "id": parts[1], "desc": parts[2]})
-        else:
-            print("YouTube 返回数据为空，可能是被限制。")
+        for entry in root.findall('ns:entry', ns):
+            title = entry.find('ns:title', ns).text
+            video_id = entry.find('yt:videoId', ns).text
+            # RSS 不带详细简介，我们需要用 yt-dlp 单独获取这个视频的简介
+            videos.append({"title": title, "id": video_id})
+        
+        print(f"RSS 抓取成功，找到 {len(videos)} 个视频")
         return videos
     except Exception as e:
-        print(f"抓取过程发生错误: {e}")
+        print(f"RSS 抓取失败: {e}")
         return []
+
+def get_video_description(video_id):
+    """单独获取单个视频的简介，避开频率限制"""
+    print(f"正在获取视频简介: {video_id}")
+    cmd = ['yt-dlp', '--get-description', f'https://www.youtube.com/watch?v={video_id}']
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
+    return result.stdout if result.returncode == 0 else ""
 
 def simple_translate(text):
     try:
@@ -50,69 +53,59 @@ def simple_translate(text):
         return text
 
 def send_email(content, video_title):
-    print(f"正在准备发送邮件: {video_title}")
+    print(f"正在发送邮件: {video_title}")
     sender = os.environ.get("SENDER_EMAIL")
     password = os.environ.get("SENDER_PASS")
     receiver = os.environ.get("RECEIVER_EMAIL")
     
-    if not all([sender, password, receiver]):
-        print("错误：Secret 配置不完整，请检查 SENDER_EMAIL, SENDER_PASS, RECEIVER_EMAIL")
-        return
-
     msg = MIMEText(content, 'plain', 'utf-8')
     msg['From'] = Header("Bloomberg监控助手", 'utf-8')
     msg['To'] = Header("主理人", 'utf-8')
-    msg['Subject'] = Header(f"【新视频通知】{video_title}", 'utf-8')
+    msg['Subject'] = Header(f"【新视频】{video_title}", 'utf-8')
 
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(sender, password)
         server.sendmail(sender, [receiver], msg.as_string())
         server.quit()
-        print("✅ 邮件发送成功！")
+        print("✅ 成功！")
     except Exception as e:
-        print(f"❌ 邮件发送出错: {e}")
+        print(f"❌ 失败: {e}")
 
 def main():
-    print("--- 自动化任务开始 ---")
+    print("--- RSS 监控任务开始 ---")
     if not os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'w') as f: json.dump([], f)
     with open(HISTORY_FILE, 'r') as f:
         history = json.load(f)
 
-    videos = get_latest_videos()
-    
-    if not videos:
-        print("未获取到任何视频信息，任务终止。")
-        return
-
+    videos = get_latest_videos_rss()
     new_found = False
+    
     for v in videos:
-        # 判断标题是否包含关键字
-        is_target = any(k.lower() in v['title'].lower() for k in KEYWORDS)
-        if is_target:
-            if v['id'] not in history:
-                print(f"发现新目标视频: {v['title']}")
-                # 提取时间轴并翻译
-                timestamps = re.findall(r'(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(.*)', v['desc'])
-                report = [f"标题：{simple_translate(v['title'])}\n", "时间轴："]
-                if timestamps:
-                    for ts, info in timestamps:
-                        report.append(f"[{ts}] {simple_translate(info)}")
-                else:
-                    report.append("（原简介无时间轴，请自行查看）")
-                
-                send_email("\n".join(report), v['title'])
-                history.append(v['id'])
-                new_found = True
+        # 判断标题是否命中关键字
+        if any(k.lower() in v['title'].lower() for k in KEYWORDS) and v['id'] not in history:
+            print(f"发现新目标: {v['title']}")
+            
+            # 获取简介并翻译时间轴
+            desc = get_video_description(v['id'])
+            timestamps = re.findall(r'(\d{1,2}:\d{2}(?::\d{2})?)\s*-\s*(.*)', desc)
+            
+            report = [f"标题：{simple_translate(v['title'])}\n", "时间轴："]
+            if timestamps:
+                for ts, info in timestamps:
+                    report.append(f"[{ts}] {simple_translate(info)}")
             else:
-                print(f"已处理过，跳过: {v['title']}")
+                report.append("（该视频简介中未提供时间轴）")
+            
+            send_email("\n".join(report), v['title'])
+            history.append(v['id'])
+            new_found = True
 
     if new_found:
-        with open(HISTORY_FILE, 'w') as f:
-            json.dump(history, f)
+        with open(HISTORY_FILE, 'w') as f: json.dump(history, f)
     else:
-        print("本次巡逻未发现需要推送的新节目。")
+        print("本次巡逻未发现新内容。")
     print("--- 任务结束 ---")
 
 if __name__ == "__main__":
