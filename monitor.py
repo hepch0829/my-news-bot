@@ -5,12 +5,10 @@ from email.header import Header
 
 # 配置区
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCIALMKvObZNtJ6AmdCLP7Lg"
-# 加上 Bloomberg 关键字进行第一次“必中”测试，收到信后再改回来
 KEYWORDS = ["The China Show", "Insight", "Asia Trade", "Bloomberg"]
 HISTORY_FILE = "history.json"
 
 def get_video_description(video_id):
-    print(f"正在抓取简介: {video_id}")
     cmd = ['yt-dlp', '--no-warnings', '--get-description', f'https://www.youtube.com/watch?v={video_id}']
     result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
     return result.stdout if result.returncode == 0 else ""
@@ -25,17 +23,21 @@ def send_email(content, video_title):
     sender = os.environ.get("SENDER_EMAIL")
     password = os.environ.get("SENDER_PASS")
     receiver = os.environ.get("RECEIVER_EMAIL")
+    
     msg = MIMEText(content, 'plain', 'utf-8')
-    msg['From'] = Header("Bloomberg助手", 'utf-8')
-    msg['To'] = Header("主理人", 'utf-8')
+    # 关键修改：From 必须包含你的真实发件邮箱地址
+    msg['From'] = f"BloombergBot <{sender}>" 
+    msg['To'] = receiver
     msg['Subject'] = Header(f"【发现更新】{video_title}", 'utf-8')
+    
     try:
         server = smtplib.SMTP_SSL("smtp.qq.com", 465)
         server.login(sender, password)
         server.sendmail(sender, [receiver], msg.as_string())
         server.quit()
-        print(f"✅ 邮件已发出: {video_title}")
-    except Exception as e: print(f"❌ 发信失败: {e}")
+        print(f"✅ 邮件已成功送达: {video_title}")
+    except Exception as e: 
+        print(f"❌ 还是发不出，原因: {e}")
 
 def main():
     print("--- 任务开始 ---")
@@ -67,11 +69,11 @@ def main():
                 send_email("\n".join(report), title)
                 history.append(video_id)
                 count += 1
-                if count >= 3: break # 第一次测试最多只发3个，防止封号
+                if count >= 3: break 
 
         with open(HISTORY_FILE, 'w') as f: json.dump(history, f)
         print(f"任务结束，本次新增发送: {count}")
-    except Exception as e: print(f"发生错误: {e}")
+    except Exception as e: print(f"运行出错: {e}")
 
 if __name__ == "__main__":
     main()
