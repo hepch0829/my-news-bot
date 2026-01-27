@@ -1,7 +1,7 @@
 name: Bloomberg Monitor
 on:
   schedule:
-    - cron: '*/30 * * * *'  # 每30分钟检查一次
+    - cron: '*/30 * * * *'  # 每30分钟运行一次
   workflow_dispatch:
 
 jobs:
@@ -12,7 +12,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11'  # 这里已更新为 3.11
       - name: Install dependencies
         run: |
           pip install deep-translator
