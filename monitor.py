@@ -11,7 +11,7 @@ import re
 # 配置区
 # Bloomberg Markets 的频道 ID: UCIALMKvObZNtJ6AmdCLP7Lg
 RSS_URL = "https://www.youtube.com/feeds/videos.xml?channel_id=UCIALMKvObZNtJ6AmdCLP7Lg"
-KEYWORDS = ["The China Show", "Insight", "Asia Trade"]
+KEYWORDS = ["The China Show", "Insight", "Asia Trade", "Bloomberg"]
 HISTORY_FILE = "history.json"
 
 def get_latest_videos_rss():
